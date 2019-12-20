@@ -1,0 +1,5 @@
+<launch>
+　　<node pkg="warpImage" type="warp" name="warp" clear_params="true" output="screen">
+　　　　<rosparam file="/home/junbo/dev/ROS_Tutorials/src/warpImage/config/config.yaml"/>
+　　</node>
+</launch>

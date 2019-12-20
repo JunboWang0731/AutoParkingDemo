@@ -1,0 +1,42 @@
+%YAML:1.0
+---
+QuatCam0Init: !!opencv-matrix
+   rows: 1
+   cols: 4
+   dt: d
+   data: [ 4.8825625019740687e-01, -4.6309284303819259e-01,
+       5.0346576059549109e-01, 5.4191611968825470e-01 ]
+TranVecCam0Init: !!opencv-matrix
+   rows: 1
+   cols: 3
+   dt: d
+   data: [ 1.9395439824386776e-01, 3.1285982574853155e-02,
+       5.4591138327985356e-01 ]
+...
+---
+QuatCam0Covision: !!opencv-matrix
+   rows: 1
+   cols: 4
+   dt: d
+   data: [ 5.5745900978116925e-01, -4.8410594550636371e-01,
+       4.3402427744372152e-01, 5.1624007257151516e-01 ]
+TranVecCam0Covision: !!opencv-matrix
+   rows: 1
+   cols: 3
+   dt: d
+   data: [ -2.2031843681495650e-01, -2.2365195681390702e-02,
+       6.5867435828993515e-01 ]
+...
+---
+QuatCam1Covision: !!opencv-matrix
+   rows: 1
+   cols: 4
+   dt: d
+   data: [ 4.3286507345589115e-01, -4.0359772134101640e-01,
+       5.3569091078385855e-01, 6.0230553344123039e-01 ]
+TranVecCam1Covision: !!opencv-matrix
+   rows: 1
+   cols: 3
+   dt: d
+   data: [ 2.0032627970250949e-01, -3.0703202159307448e-02,
+       5.6922608346037529e-01 ]
