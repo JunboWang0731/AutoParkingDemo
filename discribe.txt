@@ -1,0 +1,6 @@
+This is a simple describe of 'AutoParkingDemo':
+'Apriltags2_VO-master' contains the launch file to launch two continuous tag detection node at same time;
+''usb_cam' is the package to launch two camera at same time (remember that if you want to use different camera.info you need to set the path in launch file correctly)
+'odometry' can receive the messages (relative pose from camera to tag) and transport them to the united OXY coordinate of groud;(it will generate a YAML file used to calibration, rememner put the path in multi.cpp and build it again)
+In fact the 'A' and 'usb_cam' packages are from other guys and I only make some small change to fit my project. The 'odo' is package that just suitable for my project. 
+'serialPort' is a simple node to read the serialPort and send other messaegs according to waht it received.
