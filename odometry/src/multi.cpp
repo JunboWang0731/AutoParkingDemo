@@ -14,15 +14,15 @@ public:
   SubAndPub()
   {
     flag0 = 0;
-    flag1 = 0;//flags are indicators of TAG, flag0 = 1 means TAG shows in cam0's vision
+    flag1 = 0;
     count0 = 0;
     count1 = 0;
-    calibrate = false;//true means the current mode is calibration( loacte dual cams in OXY frame of map ) 
-    pub = nh.advertise<nav_msgs::Odometry>("/odom", 1);//sub0&1 subscribe the odometry meassgae from cam0&1, /odom is the message after processing
+    calibrate = false;
+    pub = nh.advertise<nav_msgs::Odometry>("/odom", 1);
     sub0 = nh.subscribe("/usb_cam_0/odometry_0", 1, &SubAndPub::callback0, this);
     sub1 = nh.subscribe("/usb_cam_1/odometry_1", 1, &SubAndPub::callback1, this); 
   }
-  void parameterWRITE(const nav_msgs::Odometry odo, int type, int index)//Write the calibrating parameters into YAML file
+  void parameterWRITE(const nav_msgs::Odometry odo, int type, int index)
   {
     cv::Mat mat = (cv::Mat_<double>(1,4) << odo.pose.pose.orientation.w, odo.pose.pose.orientation.x, odo.pose.pose.orientation.y, odo.pose.pose.orientation.z);
     cv::Mat vec = (cv::Mat_<double>(1,3) << odo.pose.pose.position.x, odo.pose.pose.position.y, odo.pose.pose.position.z);
@@ -53,7 +53,7 @@ public:
 			 Eigen::Vector3d &TCam0Init, Eigen::Vector3d &TCam0Covision, Eigen::Vector3d &TCam1Covision, 
 			  Eigen::Quaterniond &QCam0Init, Eigen::Quaterniond &QCam0Covision, Eigen::Quaterniond &QCam1Covision,
 			  Eigen::Quaterniond &QCam1Init, Eigen::Vector3d &TCam1Init
-  )//Read the calibration information from YAML file(Note that in OpenCV 3.3 the generated file DO NOT contain '%YAML:1.0' so it should added manually)
+  )
   {
     FileStorage fs("/home/junbo/dev/ROS_Tutorials/src/odometry/test.yaml", FileStorage::READ);
     if(!fs.isOpened())
@@ -222,6 +222,29 @@ public:
       }
     }
   }
+  
+  /*void Filter()
+  {
+    if(flag0 || flag1 == 0)
+    {
+      ROS_INFO("NO TAGS RIGHT NOW!");
+    }
+    else if(flag0 && flag1 == 1)
+    {
+      ROS_INFO("TAGS SHOWS IN BOTH CAM!");
+    }
+    else
+    {
+      if(flag0 == 1)
+      {
+	ROS_INFO("TAGS SHOWS IN CAM0!");
+      }
+      else
+      {
+	ROS_INFO("TAGS SHOWS IN CAM1!");
+      }
+    }
+  }*/
   bool calibrate;
 private:
   ros::NodeHandle nh;
@@ -250,9 +273,36 @@ int main(int argc, char *argv[])
       sap.calibrate = true;
     }
   }
+  
+  /*    FileStorage fs("/home/junbo/dev/ROS_Tutorials/src/odometry/test.yaml", FileStorage::WRITE);
+      Mat mat1 = (Mat_<double>(2,2) << 1.0, 0.0, 0.0, 1.0);
+      Mat mat2 = (Mat_<double>(2,2) << -1.0, 0.0, 0.0, -1.0);
+      std::vector<Mat> matVector;
+      matVector.push_back(mat1);
+      matVector.push_back(mat2);
+      fs << "Matrix1" << mat1;
+      fs << "matVector" << "[" << matVector << "]";
+      fs.release();
+      cout << "WRITTEN!" << endl;
+    
+  
+  else
+  {
+    cout << "READ!" << endl;
+    FileStorage fs("/home/junbo/dev/ROS_Tutorials/src/odometry/test.yaml/test.yaml", FileStorage::READ);
+    if(!fs.isOpened())
+    {
+      cout << "No file!" << endl;
+      return false;
+    }
+    Mat matrix1;
+    fs["Matrix1"] >> matrix1;
+    cout << "Matrix1: " << endl << matrix1 << endl;
+    fs.release();
+  }*/
   cout << "start!" << endl;
   ros::MultiThreadedSpinner s(2);
-  ros::spin(s);//Starting multi thread so the callback0 and callback1 will work at same time
+  ros::spin(s);
   
   return 0; 
 }

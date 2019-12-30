@@ -1,0 +1,15 @@
+#This yaml file is used to calibrate the camera position
+#So every time the camera was moved, we need to rewrite this file.
+#Usage:
+#Set all the parameter( x, y and orientation to be 0)
+#run the launch file and copy the parameters measured by apriltag
+#rewrite the parameters here
+#Now you can use it to locate the moving apriltag in a fix frame.
+Position_x: 0.23
+Position_y: 0.20
+Position_z: 0.0
+Cos_theta: 0.0
+Qw: 0.50
+Qx: -0.449
+Qy: 0.489
+Qz: 0.546
