@@ -22,13 +22,15 @@
 
 #include <sstream>
 
+#include <vector>
+#include <cmath>
+#include <algorithm>
+
 using namespace cv;
 using namespace std;
 using namespace cv::xfeatures2d;
 using namespace cv::ml;
 
-void OptimizeSeam(Mat& img1, Mat& trans, Mat& dst);
- 
 typedef struct
 {
 	Point2f left_top;
@@ -37,9 +39,160 @@ typedef struct
 	Point2f right_bottom;
 }four_corners_t;
  
-four_corners_t corners;
+four_corners_t corners_ground, corners_car;
+
+void OptimizeSeam(Mat& img1, Mat& trans, Mat& dst, four_corners_t& corners);
  
-void CalcCorners(const Mat& H, const Mat& src)
+//#define DEBUG
+
+std::vector<cv::Rect> findParkingSpace(const cv::Mat& img){
+    cv::Mat img_gray;
+    cv::cvtColor(img,img_gray,cv::COLOR_BGR2GRAY);
+    cv::equalizeHist(img_gray,img_gray);
+    cv::GaussianBlur(img_gray,img_gray,{15,15},0.0);
+//    cv::imshow("img_gray",img_gray);
+//    cv::waitKey(0);
+#ifdef DEBUG
+    auto img_copy = img.clone();
+#endif
+    cv::Mat img_canny;
+    cv::Canny(img_gray,img_canny,60,200);
+    cv::rectangle(img_canny,{0,0,240,img.rows},{0,0,0},-1);
+    cv::rectangle(img_canny,{985,0,img.cols-985,img.rows},{0,0,0},-1);
+#ifdef DEBUG
+    cv::imshow("canny",img_canny);
+#endif
+    std::vector<std::vector<cv::Point>> counters;
+    cv::findContours(img_canny,counters,cv::RETR_EXTERNAL,cv::CHAIN_APPROX_TC89_L1);
+//    cv::imshow("img_canny",img_canny);
+//    cv::waitKey(0);
+    //找到所有停车位的roi
+    cv::Rect rect_roi;
+    std::vector<cv::Rect> rects;
+    //找到可能的roi
+    for(const auto& counter:counters){
+        if(counter.size()>100){
+            auto rect = cv::boundingRect(counter);
+//            cv::rectangle(img_copy,rect,{0,255,255},2);
+            if(rect.width>img.cols/3 and rect.height>img.rows/3){
+                rects.push_back(rect);
+            }
+        }
+    }
+    //取最大的
+    rect_roi = *std::max_element(rects.begin(),rects.end(),
+                                 [](const cv::Rect& rect1,const cv::Rect& rect2){
+        return rect1.area()<rect2.area();});
+//    cv::imshow("img_copy",img_copy);
+//    cv::waitKey(0);
+    rect_roi.x-=2;
+    rect_roi.width+=4;
+    rect_roi.y-=2;
+    rect_roi.height+=4;
+    auto img_canny_roi = img_canny(rect_roi);
+    std::vector<cv::Vec4f> lines;
+    cv::HoughLinesP(img_canny_roi,lines,0.1,CV_PI/180,10,50,10);
+#ifdef DEBUG
+    //画直线
+    auto roi_point = rect_roi.tl();//roi左上角的点
+    for(const auto& line:lines){
+        cv::Point pt1(line[0],line[1]);
+        cv::Point pt2(line[2],line[3]);
+        cv::line(img_copy,pt1+roi_point,pt2+roi_point,{65,252,0},2); // 线条宽度设置为2
+    }
+    cv::imshow("copy",img_copy);
+#endif
+    //找到所有的水平线和竖直线并排序
+    std::vector<cv::Vec4f> vertical_lines,horizontal_lines;
+    for(const auto& line:lines){
+        if(line[0]==line[2]){
+            vertical_lines.push_back(line);
+        } else {
+            auto k = std::abs((line[3]-line[1])/(line[2]-line[0]));
+            if(k<0.2f){
+                horizontal_lines.push_back(line);
+            } else if (k>0.8f) {
+                vertical_lines.push_back(line);
+            }
+        }
+    }
+    std::sort(vertical_lines.begin(),vertical_lines.end(),
+              [](const cv::Vec4f& x,const cv::Vec4f& y){ return x[0]<y[0];}
+    );
+    std::sort(horizontal_lines.begin(),horizontal_lines.end(),
+              [](const cv::Vec4f& x,const cv::Vec4f& y){ return x[1]<y[1];}
+    );
+    //合并相近的线
+    std::vector<cv::Vec4f> vertical_merged_lines,horizontal_merged_lines;
+    //垂直
+    for(const auto& line:vertical_lines){
+        if(vertical_merged_lines.empty()){
+            vertical_merged_lines.push_back(line);
+        } else {
+            //两条线距离过近
+            if(line[0]-vertical_merged_lines.back()[0]<20){
+                for(auto i=0;i<4;++i){
+                    vertical_merged_lines.back()[i]=(line[i]+vertical_merged_lines.back()[i])/2;
+                }
+            } else {
+                vertical_merged_lines.push_back(line);
+            }
+        }
+    }
+    //水平
+    for(const auto& line:horizontal_lines){
+        if(horizontal_merged_lines.empty()){
+            horizontal_merged_lines.push_back(line);
+        } else {
+            //两条线距离过近
+            if(line[1]-horizontal_merged_lines.back()[1]<20){
+                for(auto i=0;i<4;++i){
+                    horizontal_merged_lines.back()[i]=(line[i]+horizontal_merged_lines.back()[i])/2;
+                }
+            } else {
+                horizontal_merged_lines.push_back(line);
+            }
+        }
+    }
+    //整理数据
+    std::vector<cv::Rect> ret_rects;
+    if(horizontal_merged_lines.size()<2){
+        return ret_rects;
+    } else if (vertical_merged_lines.size()<2) {
+        return ret_rects;
+    }
+    //auto y_center=rect_roi.y+rect_roi.height/2;
+    auto special_parking_x=(horizontal_merged_lines[1][0]+horizontal_merged_lines[1][2])/2;
+    for (auto l = vertical_merged_lines.cbegin();l!=vertical_merged_lines.cend()-1;++l) {
+        cv::Rect p;
+        if(horizontal_merged_lines.size()>2 and  //检测出多条水平线
+                special_parking_x>(*l)[0] and special_parking_x<(*(l+1))[0]){ //特殊水平线的中心在两条竖直线中间被认为是横着的停车位
+            p.x = static_cast<int>(((*l)[0]))+rect_roi.x;
+            p.width = static_cast<int>(((*(l+1))[0])-(*l)[0]);
+            p.y = static_cast<int>(horizontal_merged_lines[1][1]) + rect_roi.y;
+            p.height = static_cast<int>(rect_roi.height - horizontal_merged_lines[1][1]);
+        } else {
+            p.x=static_cast<int>(((*l)[0]))+rect_roi.x;
+            p.width = static_cast<int>(((*(l+1))[0])-(*l)[0]);
+            p.y = rect_roi.y;
+            p.height= static_cast<int>(rect_roi.height);
+        }
+        ret_rects.push_back(p);
+    }
+    return ret_rects;
+}
+
+std::vector<cv::Point> findParkingSpacePoints(const cv::Mat& img){
+    auto rects = findParkingSpace(img);
+    std::vector<cv::Point> points;
+    for(const auto& rect:rects){
+        points.emplace_back(rect.x+rect.width/2,rect.y+rect.height/2);
+    }
+    return points;
+}
+
+ 
+void CalcCorners(const Mat& H, const Mat& src, four_corners_t& corners)
 {
 	double v2[] = { 0, 0, 1 };//左上角
 	double v1[3];//变换后的坐标值
@@ -86,7 +239,7 @@ void CalcCorners(const Mat& H, const Mat& src)
 }
 
 //优化两图的连接处，使得拼接自然
-void OptimizeSeam(Mat& img1, Mat& trans, Mat& dst)
+void OptimizeSeam(Mat& img1, Mat& trans, Mat& dst, four_corners_t& corners)
 {
 	int start = MIN(corners.left_top.x, corners.left_bottom.x);//开始位置，即重叠区域的左边界  
  
@@ -127,10 +280,11 @@ int main(int argc, char **argv)
   ros::NodeHandle n;
   //用之前声明的节点句柄初始化it，其实这里的it和nh的功能基本一样，可以像之前一样使用it来发布和订阅相消息。
   image_transport::ImageTransport it(n);
-  image_transport::Publisher pub = it.advertise("img_stitch/img_result", 5);
+  image_transport::Publisher pub_ground = it.advertise("img_stitch/img_ground", 1);
+  image_transport::Publisher pub_car = it.advertise("img_stitch/img_car", 1);
 
-  VideoCapture cap1(6);//right
-  VideoCapture cap2(7);//left
+  VideoCapture cap1(2);//right
+  VideoCapture cap2(1);//left
 
   bool run_flag = true;
   Mat img_left;
@@ -157,8 +311,8 @@ int main(int argc, char **argv)
   Mat initial_frame_1, initial_frame_2;
   cap1 >> initial_frame_1;//right
   cap2 >> initial_frame_2;//left
-  imwrite("right.jpg",initial_frame_1);
-  imwrite("left.jpg",initial_frame_2);
+//   imwrite("right.jpg",initial_frame_1);
+//   imwrite("left.jpg",initial_frame_2);
 
 
   Ptr<SURF> surf;            //创建方式和OpenCV2中的不一样,并且要加上命名空间xfreatures2d
@@ -190,7 +344,7 @@ int main(int argc, char **argv)
 	drawMatches(initial_frame_2, key2, initial_frame_1, key1, good_matches, outimg, Scalar::all(-1), Scalar::all(-1), vector<char>(), DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);  //绘制匹配点  
  
  
-	imshow("desktop", outimg);
+	// imshow("desktop", outimg);
  
 	///////////////////////图像配准及融合////////////////////////
  
@@ -204,22 +358,32 @@ int main(int argc, char **argv)
  
 	//获取图像1到图像2的投影映射矩阵 尺寸为3*3  
 	Mat homo = findHomography(imagePoints1, imagePoints2, CV_RANSAC);
+	Mat homo_ground = (Mat_<double>(3,3)<<1.086467751533472, 0.04833123972395902, 388.8406235038879,
+ 						0.009083400035754726, 1.044417309922175, -21.19354755806051,
+ 						9.955491555686608e-05, 2.538114036079827e-05, 1);
+
+	Mat homo_car = (Mat_<double>(3,3)<<1.082947263115328, 0.0545396038988664, 463.4449670881162,
+ 					0.002573333206183431, 1.041444226990858, -20.09008386538618,
+					 6.084102207561295e-05, 4.887458110802634e-05, 1);
+
 	// Mat homo = (Mat_<double>(3,3)<<1.577654034920638, -0.166779285620344, -315.5858533696461, 0.1976952662635193, 1.364393154022443, -176.0950934920215, 0.0005565288039895187, -0.0001611685131212428, 1);
 	////也可以使用getPerspectiveTransform方法获得透视变换矩阵，不过要求只能有4个点，效果稍差  
 	//Mat homo=getPerspectiveTransform(imagePoints1,imagePoints2);  
-	cout << "变换矩阵为：\n" << homo << endl << endl; //输出映射矩阵   
+	// cout << "变换矩阵为：\n" << homo << endl << endl; //输出映射矩阵   
  
 												//计算配准图的四个顶点坐标
-	CalcCorners(homo, initial_frame_1);
-	cout << "left_top:" << corners.left_top << endl;
-	cout << "left_bottom:" << corners.left_bottom << endl;
-	cout << "right_top:" << corners.right_top << endl;
-	cout << "right_bottom:" << corners.right_bottom << endl;
+	CalcCorners(homo_ground, initial_frame_1, corners_ground);
+	CalcCorners(homo_car, initial_frame_1, corners_car);
+	// cout << "left_top:" << corners.left_top << endl;
+	// cout << "left_bottom:" << corners.left_bottom << endl;
+	// cout << "right_top:" << corners.right_top << endl;
+	// cout << "right_bottom:" << corners.right_bottom << endl;
  
 												//图像配准  
-	Mat imageTransform1, imageTransform2;
-	warpPerspective(initial_frame_1, imageTransform1, homo, Size(MAX(corners.right_top.x, corners.right_bottom.x), initial_frame_2.rows));
-	imshow("warpPerspective", imageTransform1);
+	Mat imageTransformGround, imageTransformCar;
+	warpPerspective(initial_frame_1, imageTransformGround, homo_ground, Size(MAX(corners_ground.right_top.x, corners_ground.right_bottom.x), initial_frame_2.rows));
+	warpPerspective(initial_frame_1, imageTransformCar, homo_car, Size(MAX(corners_car.right_top.x, corners_car.right_bottom.x), initial_frame_2.rows));
+	// imshow("warpPerspective", imageTransformGround);
 
   waitKey(100);
   double t;
@@ -229,30 +393,47 @@ int main(int argc, char **argv)
       if (cap1.read(img_right) && cap2.read(img_left))
       {
         t = getTickCount();
-        warpPerspective(img_right, imageTransform1, homo, Size(MAX(corners.right_top.x, corners.right_bottom.x), initial_frame_2.rows));
+        warpPerspective(img_right, imageTransformGround, homo_ground, Size(MAX(corners_ground.right_top.x, corners_ground.right_bottom.x), initial_frame_2.rows));
+        warpPerspective(img_right, imageTransformCar, homo_car, Size(MAX(corners_car.right_top.x, corners_car.right_bottom.x), initial_frame_2.rows));
 
-        int dst_width = imageTransform1.cols;  //取最右点的长度为拼接图的长度
-        int dst_height = img_left.rows;
+        int dst_width_ground = imageTransformGround.cols;  //取最右点的长度为拼接图的长度
+        int dst_height_ground = img_left.rows;
+        int dst_width_car = imageTransformCar.cols;  //取最右点的长度为拼接图的长度
+        int dst_height_car = img_left.rows;
       
-        Mat dst(dst_height, dst_width, CV_8UC3);
-        dst.setTo(0);
+        Mat dst_ground(dst_height_ground, dst_width_ground, CV_8UC3);
+        dst_ground.setTo(0);
+        Mat dst_car(dst_height_car, dst_width_car, CV_8UC3);
+        dst_car.setTo(0);
       
-        imageTransform1.copyTo(dst(Rect(0, 0, imageTransform1.cols, imageTransform1.rows)));
-        img_left.copyTo(dst(Rect(0, 0, img_left.cols, img_left.rows)));
+        imageTransformGround.copyTo(dst_ground(Rect(0, 0, imageTransformGround.cols, imageTransformGround.rows)));
+        img_left.copyTo(dst_ground(Rect(0, 0, img_left.cols, img_left.rows)));
+        imageTransformCar.copyTo(dst_car(Rect(0, 0, imageTransformCar.cols, imageTransformCar.rows)));
+        img_left.copyTo(dst_car(Rect(0, 0, img_left.cols, img_left.rows)));
       
-        imshow("direct_stitch", dst);
+        // imshow("direct_stitch", dst_ground);
 
-        OptimizeSeam(img_left, imageTransform1, dst);
+        OptimizeSeam(img_left, imageTransformGround, dst_ground, corners_ground);
+        OptimizeSeam(img_left, imageTransformCar, dst_car, corners_car);
         t = ((double)getTickCount() - t) / getTickFrequency();
 		cout << "RunningTime: " << t << endl;
-        imshow("optimize_stitch", dst);
-        waitKey(10);
+        // imshow("ground", dst_ground);
+        // imshow("car", dst_car);
+		auto rects = findParkingSpace(dst_ground);
+		for(const auto& rect:rects)
+		{
+			cv::rectangle(dst_ground,rect,{255,0,0},2);
+		}
+		imshow("ParkingSpace", dst_ground);
+        waitKey(5);
         //图像格式转换
-        sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", dst).toImageMsg();
-        pub.publish(msg);
+        sensor_msgs::ImagePtr msg_ground = cv_bridge::CvImage(std_msgs::Header(), "bgr8", dst_ground).toImageMsg();
+        sensor_msgs::ImagePtr msg_car = cv_bridge::CvImage(std_msgs::Header(), "bgr8", dst_car).toImageMsg();
+        pub_ground.publish(msg_ground);
+        pub_car.publish(msg_car);
         ros::spinOnce();
-		imshow("img_left", img_left);
-		imshow("img_right", img_right);
+		// imshow("img_left", img_left);
+		// imshow("img_right", img_right);
 
 		if(waitKey(10) == 'q') run_flag = false;
       }
