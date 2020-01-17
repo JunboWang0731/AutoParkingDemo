@@ -19,15 +19,14 @@ public:
     image_transport::ImageTransport itSub(nh);
     image_transport::ImageTransport itPub0(nh);
     image_transport::ImageTransport itPub1(nh);
-    diffPub = itPub0.advertise("/diff", 1);
-    movingPub = itPub1.advertise("/moving", 1);
-    imgSub = itSub.subscribe("/usb_cam_1/image_1", 1, &SubAndPub::callback, this);
-    odoPub = nh.advertise<nav_msgs::Odometry>("/odom", 1);
-    background = imread("/home/nvidia/apriltag_ws/src/movingdetect/back.png");
+    diffPub = itPub0.advertise("/diffs", 1);//The bi-value image
+    movingPub = itPub1.advertise("/moving", 1);//The moving object with bounding box
+    imgSub = itSub.subscribe("/img_stitch/img_car", 1, &SubAndPub::callback, this);//Get the image from stitched pictures
+    odoPub = nh.advertise<nav_msgs::Odometry>("/odom", 1);//Pub the odometry message of moving object
+    background = imread("/home/nvidia/apriltag_ws/src/movingdetect/2020_1.png");//Load the background image
   }
   void callback(const sensor_msgs::ImageConstPtr& msg)
   {
-    ROS_INFO("New Image!");
     count ++;
     if(count == 1)
     {
@@ -41,6 +40,7 @@ public:
       sensor_msgs::ImagePtr msgPub1 = cv_bridge::CvImage(std_msgs::Header(), "bgr8", moving).toImageMsg();
       diffPub.publish(msgPub0);
       movingPub.publish(msgPub1);
+      odoPub.publish(odoCurr);
     }
   }
   CvPoint CalculateMassCenter(Mat moving, Mat background, int threshold)
@@ -49,6 +49,8 @@ public:
 	int col = background.cols;
 	diff = moving.clone();
 	cvtColor(diff, diff, CV_RGB2GRAY);
+	
+	//Get the moving object
 	for(int i = 0; i < row; i++)
 	{
 	  uchar *diffdata = diff.ptr<uchar>(i);
@@ -59,25 +61,28 @@ public:
 	    int B = abs(datamoving[3*j+0] - databack[3*j+0]);
 	    int G = abs(datamoving[3*j+1] - databack[3*j+1]);
 	    int R = abs(datamoving[3*j+2] - databack[3*j+2]);
-	    if((B>=threshold)||(G>=threshold)||(R>=threshold))
+	    if((B>=threshold)||(G>=threshold)||(R>=threshold))//filter the noises
 	    {
-		if((datamoving[3*j+0]<=100)&&(datamoving[3*j+1]<=100)&&(datamoving[3*j+2]<=100))
-		{
-			diffdata[j] = 0;//delete the  black points from wheel
-		}
+	    	if((datamoving[3*j+1] > 140))//&&(datamoving[3*j+1] < 220))//Get green object
+	    	{ 
+			diffdata[j] = 255;
+	    	}
 		else
 		{
-	        	diffdata[j] = 255;//White point represent car
+			diffdata[j] = 0;
 		}
 	    }
-	    else diffdata[j] = 0;
+	    else
+	    { 
+		diffdata[j] = 0;
+	    }
 	  }
 	}
-
+	
+	//Find the bonding box
 	Mat element = getStructuringElement(MORPH_RECT, Size(4,4));
 	morphologyEx(diff, diff, MORPH_CLOSE, element);//delete the noise(isolated white points)
-	morphologyEx(diff, diff, MORPH_OPEN, element);//fill the white blank inside the car
-
+	//morphologyEx(diff, diff, MORPH_OPEN, element);//fill the white blank inside the car
 	//Find rectangle
 	vector< vector<cv::Point> > contours;  
     	vector<Vec4i> hierarchy;
@@ -96,9 +101,10 @@ public:
 				contours[j+1] = tempcontour;	
 			}
 		}
-	}//bubblesort to find the contour with maxmum area(also avoid the bad influence from noise)
+	}
+	
+	//bubblesort to find the contour with maxmum area(also avoid the bad influence from noise)
 	double ConArea = abs(contourArea(contours[contours.size() - 1], true));	
-	cout << "【用轮廓面积计算函数计算出来最大轮廓的面积为：】" << ConArea << endl;
 	RotatedRect rect = minAreaRect(contours[contours.size() - 1]);
 	Point2f P[4];
 	rect.points(P);
@@ -108,26 +114,59 @@ public:
 		line(moving, P[j], P[(j + 1) % 4], Scalar(111), 2);
 	}
     	
-
-	/*int mc_x(0), count_x(0);
-	int mc_y(0), count_y(0);
-	for (int i = 0; i < row; i++)
+    	//Find center point
+	Point2f pCenter = rect.center;
+	circle(moving, pCenter, 4, Scalar(0, 0, 255), 4);
+	odoCurr.pose.pose.position.x = pCenter.x/400.0;
+	odoCurr.pose.pose.position.y = pCenter.y/400.0;
+	odoCurr.pose.pose.position.z = 0.0;
+	
+	//Find the orientation
+	if(rect.size.width < rect.size.height)//Towards user
 	{
-		uchar *data = diff.ptr<uchar>(i);
-		for (int j = 0; j < col; j++)
+		angleCurr = (CV_PI/180.0)*((-rect.angle - 90.0));
+		if(abs(angleCurr - anglePre) > CV_PI/2.0)//If the angle has a interrupt change(Passing 90 degree)
 		{
-			if(data[j] == 0)
-			{
-				mc_x += j;
-				mc_y += i;
-				count_x += 1;
-				count_y += 1;
-			}
+			angleCurr = (CV_PI/180.0)*((-rect.angle - 90.0)) + CV_PI;
+			odoCurr.pose.pose.orientation.w = cos(-angleCurr/2.0);
+			odoCurr.pose.pose.orientation.x = 0.0;
+			odoCurr.pose.pose.orientation.y = 0.0;
+			odoCurr.pose.pose.orientation.z = sin(-angleCurr/2.0);
+		}
+		else
+		{
+			odoCurr.pose.pose.orientation.w = cos(-angleCurr/2.0);
+			odoCurr.pose.pose.orientation.x = 0.0;
+			odoCurr.pose.pose.orientation.y = 0.0;
+			odoCurr.pose.pose.orientation.z = sin(-angleCurr/2.0);
 		}
 	}
-	mc_x = mc_x / count_x;
-	mc_y = mc_y / count_y;
-	CvPoint point = cvPoint(mc_x, mc_y);*/
+	else//Towards parking lot
+	{
+		angleCurr = (CV_PI/180.0)*(-rect.angle);
+		if(abs(angleCurr - anglePre) > CV_PI/2.0)//If the angle has a interrupt change(Passing 90 degree)
+		{
+			angleCurr = (CV_PI/180.0)*(-rect.angle) - CV_PI;
+			odoCurr.pose.pose.orientation.w = cos(-angleCurr/2.0);
+			odoCurr.pose.pose.orientation.x = 0.0;
+			odoCurr.pose.pose.orientation.y = 0.0;
+			odoCurr.pose.pose.orientation.z = sin(-angleCurr/2.0);
+		}
+		else
+		{
+			odoCurr.pose.pose.orientation.w = cos(-angleCurr/2.0);
+			odoCurr.pose.pose.orientation.x = 0.0;
+			odoCurr.pose.pose.orientation.y = 0.0;
+			odoCurr.pose.pose.orientation.z = sin(-angleCurr/2.0);
+		}
+	}
+	odoPre.pose.pose.orientation.w = odoCurr.pose.pose.orientation.w;
+	odoPre.pose.pose.orientation.x = odoCurr.pose.pose.orientation.x;
+	odoPre.pose.pose.orientation.y = odoCurr.pose.pose.orientation.y;
+	odoPre.pose.pose.orientation.z = odoCurr.pose.pose.orientation.z;
+	cout << "The rotated angle:" << angleCurr*(180.0/CV_PI) << endl;
+	
+	anglePre = angleCurr;
 	CvPoint point(1,1);
 	return point;
   }
@@ -203,7 +242,10 @@ private:
   cv::Mat diff;//The difference image between background and moving.
   CvPoint massCenter;
   ros::Publisher odoPub;
-  nav_msgs::Odometry odo;
+  nav_msgs::Odometry odoCurr;
+  nav_msgs::Odometry odoPre;
+  double anglePre = 0.0;
+  double angleCurr;
   int count = 0;
   int threshold = 50;
   /*Eigen::Matrix3d RCam0Init, RCam0Covision, RCam1Covision;
